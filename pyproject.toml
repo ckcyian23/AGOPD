@@ -17,6 +17,16 @@ dependencies = [
 [project.scripts]
 lr-tip-eval = "agopd.experiments.offline_lr_tip_eval:main"
 
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["agopd*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
