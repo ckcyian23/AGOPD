@@ -93,6 +93,12 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=0,
+        help="Print progress every N prompts. 0 disables progress logging.",
+    )
+    parser.add_argument(
         "--lr-tip-full-mode",
         default="soft_or",
         choices=["soft_or", "add", "gated"],
@@ -160,6 +166,14 @@ def parse_budgets(raw: str) -> list[float]:
         if not 0.0 < budget <= 1.0:
             raise ValueError(f"Invalid budget fraction: {budget}")
     return budgets
+
+
+def maybe_log_progress(args: argparse.Namespace, phase: str, index: int, total: int) -> None:
+    if args.progress_every <= 0:
+        return
+    current = index + 1
+    if current == 1 or current == total or current % args.progress_every == 0:
+        print(f"[{phase}] {current}/{total}", flush=True)
 
 
 def import_runtime():
@@ -399,7 +413,8 @@ def run_student_cache(args: argparse.Namespace, prompts: list[str], budgets: lis
         args.local_files_only,
     )
     cached = []
-    for prompt in prompts:
+    for prompt_idx, prompt in enumerate(prompts):
+        maybe_log_progress(args, "student", prompt_idx, len(prompts))
         sample = generate_rollout(
             torch,
             tokenizer,
@@ -429,7 +444,8 @@ def run_student_cache(args: argparse.Namespace, prompts: list[str], budgets: lis
         args.local_files_only,
     )
     results = []
-    for sample in cached:
+    for sample_idx, sample in enumerate(cached):
+        maybe_log_progress(args, "teacher", sample_idx, len(cached))
         teacher_logits, teacher_hidden = forward_tensors(
             torch, teacher, sample["input_ids"], sample["attention_mask"], args.layer_index
         )
@@ -470,7 +486,8 @@ def run_joint(args: argparse.Namespace, prompts: list[str], budgets: list[float]
     )
 
     results = []
-    for prompt in prompts:
+    for prompt_idx, prompt in enumerate(prompts):
+        maybe_log_progress(args, "joint", prompt_idx, len(prompts))
         sample = generate_rollout(
             torch,
             tokenizer,
