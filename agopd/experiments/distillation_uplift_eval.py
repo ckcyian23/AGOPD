@@ -40,11 +40,28 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--selector",
         default="tip",
-        choices=["random", "entropy", "divergence", "relation", "tip", "lr_tip_soft_or", "lr_tip_add", "lr_tip_gated"],
+        choices=[
+            "random",
+            "entropy",
+            "divergence",
+            "relation",
+            "tip",
+            "lr_tip_soft_or",
+            "lr_tip_add",
+            "lr_tip_gated",
+            "lr_tip_product",
+            "lr_tip_product_add",
+        ],
     )
     parser.add_argument("--budget", type=float, default=0.05)
     parser.add_argument("--relation-gamma", type=float, default=1.0)
     parser.add_argument("--relation-lambda", type=float, default=1.0)
+    parser.add_argument(
+        "--relation-loss-weight",
+        type=float,
+        default=0.0,
+        help="Auxiliary relation-profile loss weight used during training.",
+    )
     parser.add_argument("--epochs", type=int, default=1)
     parser.add_argument("--lr", type=float, default=1e-6)
     parser.add_argument("--seed", type=int, default=13)
@@ -81,6 +98,10 @@ def select_scores(scores: Any, selector: str, relation_lambda: float) -> Any:
             scores.tip_soft_or
             + relation_lambda * scores.relation_norm * (1.0 - scores.tip_soft_or)
         ).clamp(0.0, 1.0)
+    if selector == "lr_tip_product":
+        return scores.lr_tip_product
+    if selector == "lr_tip_product_add":
+        return scores.lr_tip_product_add
     raise ValueError(f"Unsupported score selector: {selector}")
 
 
@@ -189,6 +210,76 @@ def kl_loss_on_mask(
     return per_token[pred_mask].mean()
 
 
+def relation_profile_loss_on_mask(
+    torch: Any,
+    student: Any,
+    teacher: Any,
+    sample: dict[str, Any],
+    label_mask: Any,
+    args: argparse.Namespace,
+    train: bool,
+) -> Any:
+    import torch.nn.functional as F
+
+    device = model_device(student)
+    input_ids = sample["input_ids"].to(device)
+    attention_mask = sample["attention_mask"].to(device)
+    label_mask = label_mask.to(device=device, dtype=torch.bool)
+    selected_positions = [
+        int(idx)
+        for idx in torch.where(label_mask[0])[0].detach().cpu().tolist()
+        if int(idx) > 0
+    ]
+    if not selected_positions:
+        return None
+
+    with torch.no_grad():
+        teacher_output = teacher(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            use_cache=False,
+        )
+        teacher_hidden = teacher_output.hidden_states[args.layer_index].float()
+        teacher_hidden = F.layer_norm(teacher_hidden, teacher_hidden.shape[-1:])
+        teacher_hidden = F.normalize(teacher_hidden, p=2, dim=-1)
+
+    if train:
+        student_output = student(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            output_hidden_states=True,
+            use_cache=False,
+        )
+    else:
+        with torch.no_grad():
+            student_output = student(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                output_hidden_states=True,
+                use_cache=False,
+            )
+    student_hidden = student_output.hidden_states[args.layer_index].float()
+    student_hidden = F.layer_norm(student_hidden, student_hidden.shape[-1:])
+    student_hidden = F.normalize(student_hidden, p=2, dim=-1)
+
+    losses = []
+    for idx in selected_positions:
+        start = max(0, idx - args.window)
+        if start == idx:
+            continue
+        teacher_rel = (
+            teacher_hidden[:, start:idx, :] * teacher_hidden[:, idx : idx + 1, :]
+        ).sum(dim=-1)
+        student_rel = (
+            student_hidden[:, start:idx, :] * student_hidden[:, idx : idx + 1, :]
+        ).sum(dim=-1)
+        losses.append(F.huber_loss(student_rel, teacher_rel, reduction="mean"))
+    if not losses:
+        return None
+    return torch.stack(losses).mean()
+
+
 def evaluate_kl(torch: Any, student: Any, teacher: Any, samples: list[dict[str, Any]]) -> float:
     losses = []
     for sample in samples:
@@ -198,6 +289,29 @@ def evaluate_kl(torch: Any, student: Any, teacher: Any, samples: list[dict[str, 
             teacher,
             sample,
             sample["target_mask"],
+            train=False,
+        )
+        if loss is not None:
+            losses.append(float(loss.detach().cpu()))
+    return sum(losses) / len(losses) if losses else float("nan")
+
+
+def evaluate_relation(
+    torch: Any,
+    student: Any,
+    teacher: Any,
+    samples: list[dict[str, Any]],
+    args: argparse.Namespace,
+) -> float:
+    losses = []
+    for sample in samples:
+        loss = relation_profile_loss_on_mask(
+            torch,
+            student,
+            teacher,
+            sample,
+            sample["target_mask"],
+            args,
             train=False,
         )
         if loss is not None:
@@ -227,6 +341,19 @@ def train_selected(
             )
             if loss is None:
                 continue
+            relation_loss = None
+            if args.relation_loss_weight > 0.0:
+                relation_loss = relation_profile_loss_on_mask(
+                    torch,
+                    student,
+                    teacher,
+                    sample,
+                    sample["selected_mask"],
+                    args,
+                    train=True,
+                )
+                if relation_loss is not None:
+                    loss = loss + args.relation_loss_weight * relation_loss
             loss.backward()
             optimizer.step()
             losses.append(float(loss.detach().cpu()))
@@ -293,8 +420,10 @@ def main() -> None:
         )
 
     eval_before = evaluate_kl(torch, student, teacher, eval_samples)
+    eval_relation_before = evaluate_relation(torch, student, teacher, eval_samples, args)
     train_losses = train_selected(torch, student, teacher, train_samples, args)
     eval_after = evaluate_kl(torch, student, teacher, eval_samples)
+    eval_relation_after = evaluate_relation(torch, student, teacher, eval_samples, args)
     selected_tokens = sum(sample["selected_tokens"] for sample in train_samples)
     target_tokens = sum(sample["target_tokens"] for sample in train_samples)
     report = {
@@ -308,6 +437,14 @@ def main() -> None:
             "eval_kl_delta": eval_after - eval_before,
             "relative_eval_kl_delta": (
                 (eval_after - eval_before) / eval_before if eval_before else None
+            ),
+            "eval_relation_before": eval_relation_before,
+            "eval_relation_after": eval_relation_after,
+            "eval_relation_delta": eval_relation_after - eval_relation_before,
+            "relative_eval_relation_delta": (
+                (eval_relation_after - eval_relation_before) / eval_relation_before
+                if eval_relation_before
+                else None
             ),
             "train_loss_first": train_losses[0] if train_losses else None,
             "train_loss_last": train_losses[-1] if train_losses else None,

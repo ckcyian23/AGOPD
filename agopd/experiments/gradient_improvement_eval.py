@@ -199,6 +199,14 @@ def aggregate_rows(rows: list[dict[str, Any]], budgets: list[float], seed: int) 
             [row.get("lr_tip_gated", row["lr_tip_full"]) for row in rows],
             improvement,
         ),
+        "corr_lr_tip_product_improvement": pearson(
+            [row.get("lr_tip_product", row["lr_tip_full"]) for row in rows],
+            improvement,
+        ),
+        "corr_lr_tip_product_add_improvement": pearson(
+            [row.get("lr_tip_product_add", row["lr_tip_full"]) for row in rows],
+            improvement,
+        ),
         "corr_lr_tip_full_improvement": pearson(
             [row["lr_tip_full"] for row in rows], improvement
         ),
@@ -229,6 +237,12 @@ def aggregate_rows(rows: list[dict[str, Any]], budgets: list[float], seed: int) 
             ),
             "lr_tip_gated_grad_improvement_mean": select_top_mean(
                 rows, "lr_tip_gated", "grad_improvement", budget
+            ),
+            "lr_tip_product_grad_improvement_mean": select_top_mean(
+                rows, "lr_tip_product", "grad_improvement", budget
+            ),
+            "lr_tip_product_add_grad_improvement_mean": select_top_mean(
+                rows, "lr_tip_product_add", "grad_improvement", budget
             ),
             "lr_tip_full_grad_improvement_mean": select_top_mean(
                 rows, "lr_tip_full", "grad_improvement", budget
@@ -349,6 +363,12 @@ def main() -> None:
                     "lr_tip_add": float(scores.lr_tip_add[0, label_position].item()),
                     "lr_tip_gated": float(
                         scores.lr_tip_gated[0, label_position].item()
+                    ),
+                    "lr_tip_product": float(
+                        scores.lr_tip_product[0, label_position].item()
+                    ),
+                    "lr_tip_product_add": float(
+                        scores.lr_tip_product_add[0, label_position].item()
                     ),
                     "lr_tip_full": float(scores.lr_tip_full[0, label_position].item()),
                 }

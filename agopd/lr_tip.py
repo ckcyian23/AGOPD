@@ -28,6 +28,8 @@ class LRTipScores:
     lr_tip_soft_or: Any
     lr_tip_add: Any
     lr_tip_gated: Any
+    lr_tip_product: Any
+    lr_tip_product_add: Any
     lr_tip_full: Any
 
 
@@ -376,6 +378,10 @@ def compute_lr_tip(
     lr_tip_gated = (
         tip_soft_or + relation_lambda * relation_norm * (1.0 - tip_soft_or)
     ).clamp(0.0, 1.0)
+    lr_tip_product = tip_soft_or * relation_norm
+    lr_tip_product_add = (
+        tip_soft_or + relation_lambda * tip_soft_or * relation_norm
+    ).clamp(0.0, 1.0)
     lr_tip_full = {
         "soft_or": lr_tip_soft_or,
         "add": lr_tip_add,
@@ -389,6 +395,8 @@ def compute_lr_tip(
         lr_tip_soft_or = lr_tip_soft_or.masked_fill(~mask, 0.0)
         lr_tip_add = lr_tip_add.masked_fill(~mask, 0.0)
         lr_tip_gated = lr_tip_gated.masked_fill(~mask, 0.0)
+        lr_tip_product = lr_tip_product.masked_fill(~mask, 0.0)
+        lr_tip_product_add = lr_tip_product_add.masked_fill(~mask, 0.0)
         lr_tip_full = lr_tip_full.masked_fill(~mask, 0.0)
 
     return LRTipScores(
@@ -405,5 +413,7 @@ def compute_lr_tip(
         lr_tip_soft_or=lr_tip_soft_or,
         lr_tip_add=lr_tip_add,
         lr_tip_gated=lr_tip_gated,
+        lr_tip_product=lr_tip_product,
+        lr_tip_product_add=lr_tip_product_add,
         lr_tip_full=lr_tip_full,
     )

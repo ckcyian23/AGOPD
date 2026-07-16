@@ -744,6 +744,163 @@ eval metric: held-out teacher KL on fixed base-student rollouts
 - LR-TIP additive 需要至少优于 TIP 和 random，才值得进入更大训练。
 - 如果所有 selector 都不改善，需要先调学习率/训练稳定性，而不是扩大数据。
 
+### 14.1 split offset 0 / budget 0.05 结果
+
+输出：
+
+```text
+outputs/lr_tip_distill_uplift_real16_budget005
+```
+
+| Selector | Eval KL before | Eval KL after | Delta | Relative delta | Selected tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| random | 0.303044 | 0.302859 | -0.000185 | -0.061% | 48 / 1024 |
+| divergence | 0.303044 | 0.302829 | -0.000216 | -0.071% | 48 / 1024 |
+| TIP Soft-OR | 0.303044 | 0.302871 | -0.000173 | -0.057% | 48 / 1024 |
+| LR-TIP additive, w8, lambda=1.5 | 0.303044 | 0.302746 | -0.000299 | -0.099% | 48 / 1024 |
+
+解释：
+
+- 四个 selector 都有轻微 held-out KL 改善，说明训练脚本和学习率没有明显跑坏。
+- LR-TIP additive 的改善最大，强于 TIP、random 和 divergence。
+- 绝对改善仍很小，不能直接写最终结论。
+- 这一步支持继续做 split 复现，而不是立刻扩大模型/数据。
+
+正在运行复现：
+
+```text
+outputs/lr_tip_distill_uplift_real16_budget005_offset32
+```
+
+配置与上表相同，但 `prompt_offset=32`。
+
+### 14.2 split offset 32 / budget 0.05 结果
+
+输出：
+
+```text
+outputs/lr_tip_distill_uplift_real16_budget005_offset32
+```
+
+| Selector | Eval KL before | Eval KL after | Delta | Relative delta | Selected tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| random | 0.326766 | 0.326860 | +0.000094 | +0.029% | 48 / 1024 |
+| divergence | 0.326766 | 0.326712 | -0.000054 | -0.017% | 48 / 1024 |
+| TIP Soft-OR | 0.326766 | 0.326573 | -0.000193 | -0.059% | 48 / 1024 |
+| LR-TIP additive, w8, lambda=1.5 | 0.326766 | 0.326774 | +0.000008 | +0.002% | 48 / 1024 |
+
+解释：
+
+- offset32 上，LR-TIP additive 没有复现 offset0 的 uplift，反而略微变差。
+- TIP Soft-OR 在这个 split 上最好。
+- 这说明 gradient-improvement proxy 虽然证明 `D_R` 有训练收益信号，但 5% budget 的 aggressive additive selection 不稳定。
+- 当前不能声称 LR-TIP additive 已经稳定优于 TIP。
+
+路线修正：
+
+> 不继续扩大 5% additive 结果。改为验证更稳的中预算设置：budget 0.10、window16、lambda 0.75，并继续和 random / divergence / TIP 对照。
+
+正在运行：
+
+```text
+outputs/lr_tip_distill_uplift_real16_budget010_offset32
+```
+
+### 14.3 split offset 32 / budget 0.10 结果
+
+输出：
+
+```text
+outputs/lr_tip_distill_uplift_real16_budget010_offset32
+```
+
+| Selector | Eval KL before | Eval KL after | Delta | Relative delta | Selected tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| random | 0.326766 | 0.326769 | +0.000004 | +0.001% | 96 / 1024 |
+| divergence | 0.326766 | 0.326679 | -0.000087 | -0.027% | 96 / 1024 |
+| TIP Soft-OR | 0.326766 | 0.326705 | -0.000061 | -0.019% | 96 / 1024 |
+| LR-TIP additive, w16, lambda=0.75 | 0.326766 | 0.326731 | -0.000035 | -0.011% | 96 / 1024 |
+
+解释：
+
+- 中预算下 LR-TIP additive 仍然没有超过 TIP/divergence。
+- divergence 在这个 split 上最稳。
+- 这进一步说明 additive fusion 不能作为当前主方法。
+
+路线修正：
+
+> `D_R` 有 gradient-improvement 信号，但不能简单 additive 到 TIP ranking。下一步改为交集式 selector：只奖励同时具有高 TIP 与高 relation 的 token，避免 relation 把低 TIP token 强行顶上来。
+
+待验证 selector：
+
+```text
+lr_tip_product = TIP_SoftOR * R_norm
+lr_tip_product_add = TIP_SoftOR + lambda * TIP_SoftOR * R_norm
+```
+
+判断：
+
+- 如果 product selector 比 TIP/divergence 更稳，说明 relation 应作为 gating/confirming signal。
+- 如果 product 仍不稳，说明 `D_R` 当前更适合作为分析信号，不适合作为直接训练选点。
+
+### 14.4 split offset 32 / product selector 结果
+
+输出：
+
+```text
+outputs/lr_tip_distill_uplift_product_offset32
+```
+
+| Selector | Budget | Eval KL before | Eval KL after | Delta | Relative delta |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| LR-TIP product, w16 | 0.05 | 0.326766 | 0.326617 | -0.000149 | -0.046% |
+| LR-TIP product, w16 | 0.10 | 0.326766 | 0.326911 | +0.000145 | +0.044% |
+
+解释：
+
+- product 5% 比 additive 5% 稳定，但仍弱于同 split 的 TIP 5%。
+- product 10% 明显变差。
+- relation 更适合低 budget 的确认信号，不适合扩大覆盖。
+
+正在运行更保守 selector：
+
+```text
+outputs/lr_tip_distill_uplift_product_add_offset32
+```
+
+目的：
+
+- 验证 `TIP + lambda * TIP * R_norm` 是否能保留 TIP 稳定性，同时带来 relation tie-break。
+- 当前运行 lambda=0.25 和 lambda=0.5，budget=0.05。
+
+### 14.5 split offset 32 / product-add 结果
+
+输出：
+
+```text
+outputs/lr_tip_distill_uplift_product_add_offset32
+```
+
+| Selector | Budget | Lambda | Eval KL before | Eval KL after | Delta | Relative delta |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| LR-TIP product-add, w16 | 0.05 | 0.25 | 0.326766 | 0.326755 | -0.000011 | -0.003% |
+| LR-TIP product-add, w16 | 0.05 | 0.50 | 0.326766 | 0.326685 | -0.000081 | -0.025% |
+
+解释：
+
+- product-add 比 aggressive additive 稳，但仍没有超过 TIP Soft-OR。
+- 当前多个 split/预算说明：把 `D_R` 只作为 token ranking 公式的一部分，不能稳定带来 held-out KL uplift。
+
+重大路线修正：
+
+> 下一步不继续微调 ranking 公式。更合理的验证是 relation-aware training：在选中的 token 上训练 `output KL + mu * relation-profile loss`，并同时评估 held-out output KL 与 relation discrepancy 是否下降。
+
+原因：
+
+- `D_R` 衡量的是局部 hidden relation mismatch。
+- 只用 output KL 更新，不一定会修复 hidden relation mismatch。
+- 如果 LR-TIP 的核心是 relation signal，那么 relation 应该进入训练目标或辅助目标，而不是只进入 selection。
+
 ## 13. 下一步融合策略验证
 
 当前代码已加入三种 full LR-TIP ranking：
