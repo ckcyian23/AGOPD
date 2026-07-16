@@ -40,3 +40,28 @@ def test_lr_tip_respects_mask_and_shape():
     assert scores.importance.shape == (1, 4)
     assert scores.importance[0, 3].item() == 0.0
     assert scores.output_disagreement[0, 0].item() == 0.0
+
+
+def test_select_prompt_shard_interleaves_prompts():
+    from agopd.experiments.offline_lr_tip_eval import select_prompt_shard
+
+    prompts = [f"prompt-{idx}" for idx in range(7)]
+
+    assert select_prompt_shard(prompts, num_shards=2, shard_index=0) == [
+        "prompt-0",
+        "prompt-2",
+        "prompt-4",
+        "prompt-6",
+    ]
+    assert select_prompt_shard(prompts, num_shards=2, shard_index=1) == [
+        "prompt-1",
+        "prompt-3",
+        "prompt-5",
+    ]
+
+
+def test_select_prompt_shard_validates_index():
+    from agopd.experiments.offline_lr_tip_eval import select_prompt_shard
+
+    with pytest.raises(ValueError):
+        select_prompt_shard(["a"], num_shards=2, shard_index=2)

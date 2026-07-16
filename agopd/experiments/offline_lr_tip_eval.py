@@ -41,6 +41,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beta", type=float, default=0.5)
     parser.add_argument("--budgets", default="0.1,0.2")
     parser.add_argument("--seed", type=int, default=13)
+    parser.add_argument(
+        "--num-shards",
+        type=int,
+        default=1,
+        help="Split prompts into this many interleaved shards for multi-GPU runs.",
+    )
+    parser.add_argument(
+        "--shard-index",
+        type=int,
+        default=0,
+        help="Run only this zero-based prompt shard.",
+    )
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda"])
     parser.add_argument(
         "--dtype", default="auto", choices=["auto", "float16", "bfloat16", "float32"]
@@ -98,6 +110,16 @@ def load_prompts(path: Path | None, limit: int) -> list[str]:
             if line.strip()
         ]
     return prompts[:limit] if limit > 0 else prompts
+
+
+def select_prompt_shard(prompts: list[str], num_shards: int, shard_index: int) -> list[str]:
+    if num_shards < 1:
+        raise ValueError("num_shards must be >= 1.")
+    if not 0 <= shard_index < num_shards:
+        raise ValueError(
+            f"shard_index must be in [0, {num_shards}). Got {shard_index}."
+        )
+    return prompts[shard_index::num_shards]
 
 
 def parse_budgets(raw: str) -> list[float]:
@@ -418,6 +440,10 @@ def main() -> None:
     args = parse_args()
     budgets = parse_budgets(args.budgets)
     prompts = load_prompts(args.prompts_file, args.limit)
+    prompts = select_prompt_shard(prompts, args.num_shards, args.shard_index)
+    default_output_dir = Path("outputs/lr_tip_mvp")
+    if args.num_shards > 1 and args.output_dir == default_output_dir:
+        args.output_dir = args.output_dir / f"shard_{args.shard_index}_of_{args.num_shards}"
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     if args.execution_mode == "student-cache":
