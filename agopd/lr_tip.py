@@ -18,8 +18,14 @@ class LRTipScores:
     importance: Any
     output_disagreement: Any
     relation_disagreement: Any
+    student_entropy: Any
     output_z: Any
     relation_z: Any
+    entropy_norm: Any
+    output_norm: Any
+    relation_norm: Any
+    tip_soft_or: Any
+    lr_tip_soft_or: Any
 
 
 def _require_torch():
@@ -66,13 +72,56 @@ def masked_zscore(values: Any, mask: Any | None = None, eps: float = 1e-6) -> An
     return z.masked_fill(~mask, 0.0)
 
 
+def masked_minmax(
+    values: Any,
+    mask: Any | None = None,
+    eps: float = 1e-6,
+    clip_quantile: float | None = None,
+) -> Any:
+    """Min-max normalize scores over valid tokens in the current batch."""
+
+    torch, _ = _require_torch()
+    if mask is None:
+        mask = _full_mask_like(values)
+    mask = mask.to(device=values.device, dtype=torch.bool)
+    values_f = values.float()
+    valid = values_f[mask]
+    if valid.numel() == 0:
+        return torch.zeros_like(values_f)
+
+    clipped = values_f
+    if clip_quantile is not None:
+        if not 0.0 < clip_quantile <= 1.0:
+            raise ValueError("clip_quantile must be in (0, 1].")
+        upper = torch.quantile(valid, clip_quantile)
+        clipped = values_f.clamp_max(upper)
+        valid = clipped[mask]
+
+    min_value = valid.min()
+    max_value = valid.max()
+    norm = (clipped - min_value) / (max_value - min_value).clamp_min(eps)
+    return norm.masked_fill(~mask, 0.0)
+
+
+def soft_or(*scores: Any) -> Any:
+    """Parameter-free Soft-OR over scores normalized to [0, 1]."""
+
+    if not scores:
+        raise ValueError("At least one score tensor is required.")
+    result = scores[0]
+    for score in scores[1:]:
+        result = result + score - result * score
+    return result
+
+
 def compute_output_disagreement(
     logits_teacher: Any,
     logits_student: Any,
     attention_mask: Any | None = None,
     chunk_size: int | None = None,
+    direction: str = "forward",
 ) -> Any:
-    """Compute token-level KL(P_teacher || P_student).
+    """Compute token-level teacher/student KL divergence.
 
     Args:
         logits_teacher: Teacher logits with shape [B, T, V].
@@ -80,9 +129,13 @@ def compute_output_disagreement(
         attention_mask: Optional [B, T] mask.
         chunk_size: Optional number of sequence positions to score per chunk.
             This reduces peak memory when V is large.
+        direction: ``forward`` computes KL(P_teacher || P_student), while
+            ``reverse`` computes KL(P_student || P_teacher).
     """
 
     torch, F = _require_torch()
+    if direction not in {"forward", "reverse"}:
+        raise ValueError("direction must be 'forward' or 'reverse'.")
     if logits_teacher.shape != logits_student.shape:
         raise ValueError(
             "Teacher and student logits must have the same shape. "
@@ -102,8 +155,40 @@ def compute_output_disagreement(
         s_logits = logits_student[:, start:end, :].float()
         log_p_t = F.log_softmax(t_logits, dim=-1)
         log_p_s = F.log_softmax(s_logits, dim=-1)
-        p_t = log_p_t.exp()
-        scores[:, start:end] = (p_t * (log_p_t - log_p_s)).sum(dim=-1)
+        if direction == "forward":
+            p_t = log_p_t.exp()
+            scores[:, start:end] = (p_t * (log_p_t - log_p_s)).sum(dim=-1)
+        else:
+            p_s = log_p_s.exp()
+            scores[:, start:end] = (p_s * (log_p_s - log_p_t)).sum(dim=-1)
+
+    if attention_mask is not None:
+        mask = attention_mask.to(device=scores.device, dtype=torch.bool)
+        scores = scores.masked_fill(~mask, 0.0)
+    return scores
+
+
+def compute_student_entropy(
+    logits_student: Any,
+    attention_mask: Any | None = None,
+    chunk_size: int | None = None,
+) -> Any:
+    """Compute token-level student entropy H(P_student)."""
+
+    torch, F = _require_torch()
+    bsz, seq_len, _ = logits_student.shape
+    if chunk_size is None or chunk_size <= 0:
+        chunk_size = seq_len
+
+    scores = torch.empty(
+        (bsz, seq_len), dtype=torch.float32, device=logits_student.device
+    )
+    for start in range(0, seq_len, chunk_size):
+        end = min(start + chunk_size, seq_len)
+        logits = logits_student[:, start:end, :].float()
+        log_p = F.log_softmax(logits, dim=-1)
+        p = log_p.exp()
+        scores[:, start:end] = -(p * log_p).sum(dim=-1)
 
     if attention_mask is not None:
         mask = attention_mask.to(device=scores.device, dtype=torch.bool)
@@ -174,6 +259,8 @@ def compute_lr_tip(
     output_chunk_size: int | None = None,
     shift_output_to_labels: bool = False,
     huber_delta: float = 1.0,
+    entropy_clip_quantile: float | None = 0.98,
+    output_kl_direction: str = "forward",
 ) -> LRTipScores:
     """Compute fused LR-TIP importance.
 
@@ -187,9 +274,18 @@ def compute_lr_tip(
         logits_student,
         attention_mask=attention_mask,
         chunk_size=output_chunk_size,
+        direction=output_kl_direction,
     )
     if shift_output_to_labels:
         do = shift_scores_to_label_positions(do)
+
+    entropy = compute_student_entropy(
+        logits_student,
+        attention_mask=attention_mask,
+        chunk_size=output_chunk_size,
+    )
+    if shift_output_to_labels:
+        entropy = shift_scores_to_label_positions(entropy)
 
     dr = compute_relation_disagreement(
         hidden_teacher,
@@ -202,15 +298,30 @@ def compute_lr_tip(
     output_z = masked_zscore(do, attention_mask)
     relation_z = masked_zscore(dr, attention_mask)
     importance = alpha * output_z + beta * relation_z
+    entropy_norm = masked_minmax(
+        entropy, attention_mask, clip_quantile=entropy_clip_quantile
+    )
+    output_norm = masked_minmax(do, attention_mask)
+    relation_norm = masked_minmax(dr, attention_mask)
+    tip_soft_or = soft_or(entropy_norm, output_norm)
+    lr_tip_soft_or = soft_or(entropy_norm, output_norm, relation_norm)
     if attention_mask is not None:
         torch, _ = _require_torch()
         mask = attention_mask.to(device=importance.device, dtype=torch.bool)
         importance = importance.masked_fill(~mask, 0.0)
+        tip_soft_or = tip_soft_or.masked_fill(~mask, 0.0)
+        lr_tip_soft_or = lr_tip_soft_or.masked_fill(~mask, 0.0)
 
     return LRTipScores(
         importance=importance,
         output_disagreement=do,
         relation_disagreement=dr,
+        student_entropy=entropy,
         output_z=output_z,
         relation_z=relation_z,
+        entropy_norm=entropy_norm,
+        output_norm=output_norm,
+        relation_norm=relation_norm,
+        tip_soft_or=tip_soft_or,
+        lr_tip_soft_or=lr_tip_soft_or,
     )

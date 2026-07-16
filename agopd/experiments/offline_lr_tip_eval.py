@@ -83,6 +83,15 @@ def parse_args() -> argparse.Namespace:
         default=8,
         help="Sequence positions per KL chunk; lower uses less peak memory.",
     )
+    parser.add_argument(
+        "--output-kl-direction",
+        default="forward",
+        choices=["forward", "reverse"],
+        help=(
+            "KL direction for the output-disagreement ranking axis. forward "
+            "is KL(P_teacher || P_student); reverse is KL(P_student || P_teacher)."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -274,10 +283,17 @@ def score_one(
         beta=args.beta,
         output_chunk_size=args.output_chunk_size,
         shift_output_to_labels=True,
+        output_kl_direction=args.output_kl_direction,
     )
     token_mask = sample["target_mask"]
     corr = pearson_corr(
         scores.output_disagreement, scores.relation_disagreement, token_mask
+    )
+    entropy_do_corr = pearson_corr(
+        scores.student_entropy, scores.output_disagreement, token_mask
+    )
+    entropy_dr_corr = pearson_corr(
+        scores.student_entropy, scores.relation_disagreement, token_mask
     )
     budget_metrics = evaluate_budgets(
         scores.output_disagreement,
@@ -286,12 +302,17 @@ def score_one(
         token_mask,
         budgets,
         random_seed=args.seed,
+        student_entropy=scores.student_entropy,
+        tip_importance=scores.tip_soft_or,
+        lr_tip_full_importance=scores.lr_tip_soft_or,
     )
     return {
         "prompt": sample["prompt"],
         "response": sample["response"],
         "num_target_tokens": int(token_mask.sum().item()),
         "do_dr_corr": corr,
+        "entropy_do_corr": entropy_do_corr,
+        "entropy_dr_corr": entropy_dr_corr,
         "budgets": [asdict(item) for item in budget_metrics],
     }
 
@@ -300,10 +321,28 @@ def aggregate_results(per_prompt: list[dict[str, Any]], budgets: list[float]):
     aggregate: dict[str, Any] = {
         "num_prompts": len(per_prompt),
         "mean_do_dr_corr": None,
+        "mean_entropy_do_corr": None,
+        "mean_entropy_dr_corr": None,
         "budgets": {},
     }
     corrs = [item["do_dr_corr"] for item in per_prompt if item["do_dr_corr"] == item["do_dr_corr"]]
     aggregate["mean_do_dr_corr"] = sum(corrs) / len(corrs) if corrs else None
+    entropy_do_corrs = [
+        item["entropy_do_corr"]
+        for item in per_prompt
+        if item["entropy_do_corr"] == item["entropy_do_corr"]
+    ]
+    aggregate["mean_entropy_do_corr"] = (
+        sum(entropy_do_corrs) / len(entropy_do_corrs) if entropy_do_corrs else None
+    )
+    entropy_dr_corrs = [
+        item["entropy_dr_corr"]
+        for item in per_prompt
+        if item["entropy_dr_corr"] == item["entropy_dr_corr"]
+    ]
+    aggregate["mean_entropy_dr_corr"] = (
+        sum(entropy_dr_corrs) / len(entropy_dr_corrs) if entropy_dr_corrs else None
+    )
 
     for budget in budgets:
         rows = [

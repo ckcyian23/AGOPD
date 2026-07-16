@@ -12,11 +12,26 @@ class BudgetMetrics:
     selected_tokens: int
     random_do_mean: float
     random_dr_mean: float
+    random_entropy_mean: float
+    entropy_only_do_mean: float
+    entropy_only_dr_mean: float
+    entropy_only_entropy_mean: float
+    div_only_do_mean: float
+    div_only_dr_mean: float
+    div_only_entropy_mean: float
     tip_do_mean: float
     tip_dr_mean: float
+    tip_entropy_mean: float
     lr_tip_do_mean: float
     lr_tip_dr_mean: float
+    lr_tip_entropy_mean: float
+    lr_tip_full_do_mean: float
+    lr_tip_full_dr_mean: float
+    lr_tip_full_entropy_mean: float
+    entropy_tip_overlap: float
+    div_tip_overlap: float
     tip_lr_tip_overlap: float
+    tip_lr_tip_full_overlap: float
 
 
 def _require_torch():
@@ -113,23 +128,52 @@ def evaluate_budgets(
     token_mask: Any,
     budget_fractions: list[float],
     random_seed: int = 0,
+    student_entropy: Any | None = None,
+    tip_importance: Any | None = None,
+    lr_tip_full_importance: Any | None = None,
 ) -> list[BudgetMetrics]:
+    torch = _require_torch()
+    if student_entropy is None:
+        student_entropy = torch.zeros_like(output_disagreement)
+    if tip_importance is None:
+        tip_importance = output_disagreement
+    if lr_tip_full_importance is None:
+        lr_tip_full_importance = importance
+
     results: list[BudgetMetrics] = []
     for idx, fraction in enumerate(budget_fractions):
         rand = random_mask(token_mask, fraction, seed=random_seed + idx)
-        tip = topk_mask(output_disagreement, token_mask, fraction)
+        entropy_only = topk_mask(student_entropy, token_mask, fraction)
+        div_only = topk_mask(output_disagreement, token_mask, fraction)
+        tip = topk_mask(tip_importance, token_mask, fraction)
         lr_tip = topk_mask(importance, token_mask, fraction)
+        lr_tip_full = topk_mask(lr_tip_full_importance, token_mask, fraction)
         results.append(
             BudgetMetrics(
                 budget_fraction=fraction,
                 selected_tokens=int(lr_tip.sum().item()),
                 random_do_mean=masked_mean(output_disagreement, rand),
                 random_dr_mean=masked_mean(relation_disagreement, rand),
+                random_entropy_mean=masked_mean(student_entropy, rand),
+                entropy_only_do_mean=masked_mean(output_disagreement, entropy_only),
+                entropy_only_dr_mean=masked_mean(relation_disagreement, entropy_only),
+                entropy_only_entropy_mean=masked_mean(student_entropy, entropy_only),
+                div_only_do_mean=masked_mean(output_disagreement, div_only),
+                div_only_dr_mean=masked_mean(relation_disagreement, div_only),
+                div_only_entropy_mean=masked_mean(student_entropy, div_only),
                 tip_do_mean=masked_mean(output_disagreement, tip),
                 tip_dr_mean=masked_mean(relation_disagreement, tip),
+                tip_entropy_mean=masked_mean(student_entropy, tip),
                 lr_tip_do_mean=masked_mean(output_disagreement, lr_tip),
                 lr_tip_dr_mean=masked_mean(relation_disagreement, lr_tip),
+                lr_tip_entropy_mean=masked_mean(student_entropy, lr_tip),
+                lr_tip_full_do_mean=masked_mean(output_disagreement, lr_tip_full),
+                lr_tip_full_dr_mean=masked_mean(relation_disagreement, lr_tip_full),
+                lr_tip_full_entropy_mean=masked_mean(student_entropy, lr_tip_full),
+                entropy_tip_overlap=overlap_ratio(entropy_only, tip),
+                div_tip_overlap=overlap_ratio(div_only, tip),
                 tip_lr_tip_overlap=overlap_ratio(tip, lr_tip),
+                tip_lr_tip_full_overlap=overlap_ratio(tip, lr_tip_full),
             )
         )
     return results

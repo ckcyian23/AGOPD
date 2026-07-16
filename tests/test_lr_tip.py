@@ -38,8 +38,48 @@ def test_lr_tip_respects_mask_and_shape():
     )
 
     assert scores.importance.shape == (1, 4)
+    assert scores.student_entropy.shape == (1, 4)
+    assert scores.tip_soft_or.shape == (1, 4)
+    assert scores.lr_tip_soft_or.shape == (1, 4)
     assert scores.importance[0, 3].item() == 0.0
     assert scores.output_disagreement[0, 0].item() == 0.0
+    assert scores.student_entropy[0, 0].item() == 0.0
+    assert scores.tip_soft_or[0, 3].item() == 0.0
+    assert scores.lr_tip_soft_or[0, 3].item() == 0.0
+    assert torch.all((scores.tip_soft_or >= 0.0) & (scores.tip_soft_or <= 1.0))
+    assert torch.all((scores.lr_tip_soft_or >= 0.0) & (scores.lr_tip_soft_or <= 1.0))
+
+
+def test_soft_or_is_parameter_free_union_score():
+    from agopd.lr_tip import soft_or
+
+    a = torch.tensor([[0.0, 0.5, 1.0]])
+    b = torch.tensor([[0.0, 0.5, 1.0]])
+
+    scores = soft_or(a, b)
+
+    assert torch.allclose(scores, torch.tensor([[0.0, 0.75, 1.0]]))
+
+
+def test_output_disagreement_supports_kl_direction():
+    from agopd.lr_tip import compute_output_disagreement
+
+    teacher_logits = torch.tensor([[[2.0, 0.0], [0.0, 1.0]]])
+    student_logits = torch.tensor([[[0.0, 2.0], [1.0, 0.0]]])
+
+    forward = compute_output_disagreement(
+        teacher_logits, student_logits, direction="forward"
+    )
+    reverse = compute_output_disagreement(
+        teacher_logits, student_logits, direction="reverse"
+    )
+
+    assert forward.shape == (1, 2)
+    assert reverse.shape == (1, 2)
+    assert torch.isfinite(forward).all()
+    assert torch.isfinite(reverse).all()
+    with pytest.raises(ValueError):
+        compute_output_disagreement(teacher_logits, student_logits, direction="bad")
 
 
 def test_select_prompt_shard_interleaves_prompts():
