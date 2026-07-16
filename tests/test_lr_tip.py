@@ -135,6 +135,23 @@ def test_output_disagreement_supports_kl_direction():
         compute_output_disagreement(teacher_logits, student_logits, direction="bad")
 
 
+def test_teacher_nll_advantage_is_positive_when_teacher_predicts_label_better():
+    from agopd.lr_tip import compute_teacher_nll_advantage
+
+    input_ids = torch.tensor([[0, 1, 0]])
+    teacher_logits = torch.tensor([[[0.0, 3.0], [3.0, 0.0], [0.0, 0.0]]])
+    student_logits = torch.tensor([[[3.0, 0.0], [0.0, 3.0], [0.0, 0.0]]])
+
+    advantage = compute_teacher_nll_advantage(
+        teacher_logits, student_logits, input_ids
+    )
+
+    assert advantage.shape == (1, 3)
+    assert advantage[0, 0].item() == 0.0
+    assert advantage[0, 1].item() > 0.0
+    assert advantage[0, 2].item() > 0.0
+
+
 def test_select_prompt_shard_interleaves_prompts():
     from agopd.experiments.offline_lr_tip_eval import select_prompt_shard
 

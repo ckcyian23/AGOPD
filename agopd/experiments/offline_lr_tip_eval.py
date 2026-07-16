@@ -381,7 +381,6 @@ def aggregate_results(per_prompt: list[dict[str, Any]], budgets: list[float]):
     aggregate["mean_entropy_dr_corr"] = (
         sum(entropy_dr_corrs) / len(entropy_dr_corrs) if entropy_dr_corrs else None
     )
-
     for budget in budgets:
         rows = [
             metric

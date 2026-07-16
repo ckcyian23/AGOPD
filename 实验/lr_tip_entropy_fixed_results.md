@@ -427,6 +427,10 @@ relation-only alpha/beta：
 
 ## 11. 1024-prompt 规模验证
 
+路线修正：
+
+> 1024 synthetic prompt 结构过于类似，只能作为工程吞吐和稳定性参考，不再作为主论文证据。
+
 已生成并同步：
 
 ```text
@@ -499,7 +503,248 @@ cd /data_b/qtwei/ckcyi/AGOPD
 - full Soft-OR 与 TIP overlap 是否继续接近但小于 1。
 - 规模变大后 window=8 是否仍值得作为主设置候选。
 
-## 12. 下一步融合策略验证
+## 12. 真实数据与 gradient-improvement 验证
+
+已生成：
+
+```text
+data/real_prompts_512.jsonl
+```
+
+组成：
+
+| Dataset | Count | Split |
+| --- | ---: | --- |
+| `openai/gsm8k` | 256 | test |
+| `HuggingFaceH4/MATH-500` | 256 | test |
+
+关键新增指标：
+
+```text
+grad_improvement(t) = sum(p.grad.float().square().sum()
+                          for p in student.parameters())
+```
+
+解释：
+
+- 对 token `t` 的 teacher/student logits 计算蒸馏 KL loss。
+- 对 student 参数执行一次 `backward()`，但不更新。
+- 每个 token 计算后必须 `zero_grad()`。
+- 一阶泰勒展开下，固定学习率的单步 loss 下降量与梯度范数平方成正比。
+- 如果 `D_R` 是有用的蒸馏选点信号，它应该与 `grad_improvement` 有正相关。
+- 只看 `D_R` density 不够，必须看它是否对应真实训练收益 proxy。
+
+当前待跑：
+
+| Run | Output | Purpose |
+| --- | --- | --- |
+| grad real32 w16 | `outputs/lr_tip_grad_improvement_real32_w16` | 真实数据 gradient-improvement pilot |
+
+启动脚本：
+
+```text
+scripts/launch_lr_tip_grad_improvement_real32.sh
+```
+
+判断标准：
+
+1. `corr_relation_improvement` 是否为正。
+2. `lr_tip_full_grad_improvement_mean` 是否高于 `tip_grad_improvement_mean` 和 random。
+3. window8 是否改善 `D_R -> grad_improvement`，而不只是提高 `D_R` density。
+4. 如果上述不成立，暂缓蒸馏，回头改 relation signal 或 fusion。
+
+### 12.1 real32 / w16 初步结果
+
+输出：
+
+```text
+outputs/lr_tip_grad_improvement_real32_w16/merged/report.json
+```
+
+配置：
+
+```text
+real prompts: 32
+sampled tokens: 512
+max_new_tokens: 64
+tokens_per_prompt: 16
+window: 16
+layer_index: -2
+improvement: per-token KL backward full-parameter grad norm squared
+```
+
+相关性：
+
+| Score | Corr with grad_improvement |
+| --- | ---: |
+| output disagreement `D_O` | 0.539 |
+| relation disagreement `D_R` | 0.306 |
+| student entropy | 0.114 |
+| TIP Soft-OR | 0.264 |
+| LR-TIP full Soft-OR | 0.265 |
+
+Top-budget mean `grad_improvement`：
+
+| Budget | Random | Entropy | Divergence | Relation | TIP | LR-TIP full |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.05 | 25,032 | 44,573 | 664,515 | 368,583 | 278,398 | 282,444 |
+| 0.10 | 30,050 | 55,544 | 398,395 | 211,693 | 232,004 | 246,331 |
+| 0.20 | 33,593 | 87,659 | 237,757 | 117,494 | 202,720 | 204,883 |
+
+解释：
+
+- `D_R` 对 gradient-improvement 有正相关，初步支持 relation signal 的训练收益意义。
+- `D_O` 当前更强，说明 teacher/student output divergence 本身仍是最强单轴信号。
+- `D_R` 单轴 selector 在低 budget 下选到的 gradient-improvement 明显高于 random/entropy，但低于 divergence。
+- 当前 parameter-free 三轴 Soft-OR 只比 TIP 小幅更高，说明后续重点应验证 additive/gated fusion，而不是直接扩大数据或进入蒸馏。
+
+正在运行：
+
+```text
+outputs/lr_tip_grad_improvement_real32_w16_fusion
+```
+
+目的：
+
+- 同时记录 `lr_tip_soft_or` / `lr_tip_add` / `lr_tip_gated`。
+- 判断更显式的 relation fusion 是否比 TIP Soft-OR 有更强训练收益选择能力。
+
+### 12.2 real32 / w16 fusion 结果
+
+输出：
+
+```text
+outputs/lr_tip_grad_improvement_real32_w16_fusion/merged/report.json
+```
+
+相关性：
+
+| Score | Corr with grad_improvement |
+| --- | ---: |
+| `D_O` | 0.539 |
+| `D_R` | 0.306 |
+| entropy | 0.114 |
+| TIP Soft-OR | 0.264 |
+| LR-TIP Soft-OR | 0.265 |
+| LR-TIP additive | 0.264 |
+| LR-TIP gated | 0.265 |
+
+Top-budget mean `grad_improvement`：
+
+| Budget | Random | TIP | LR-TIP Soft-OR | LR-TIP additive | LR-TIP gated |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.05 | 25,033 | 278,396 | 282,441 | 396,545 | 282,441 |
+| 0.10 | 30,050 | 232,004 | 246,330 | 245,790 | 246,330 |
+| 0.20 | 33,592 | 202,720 | 204,883 | 187,234 | 204,883 |
+
+解释：
+
+- additive fusion 在 5% 低预算下明显优于 TIP 和 parameter-free Soft-OR。
+- additive 在 20% 预算下变差，说明 relation signal 更像低预算补充信号，不适合无约束扩大覆盖。
+- gated 与 Soft-OR 当前几乎相同，说明默认参数下还没有真正改变排序。
+- 下一步需要比较 window8，并考虑更小 `lambda` 或只在低 budget 场景使用 additive LR-TIP。
+
+正在运行：
+
+```text
+outputs/lr_tip_grad_improvement_real32_w8_fusion
+```
+
+### 12.3 real32 fusion sweep 结论
+
+sweep 不需要重新 backward，直接读取 gradient report 的 per-token `TIP_SoftOR` 和 `relation_norm`，比较不同融合参数：
+
+```text
+soft_or: SoftOR(TIP, gamma * R_norm)
+add:     TIP + lambda * R_norm
+gated:   TIP + lambda * R_norm * (1 - TIP)
+```
+
+window 16 最优：
+
+| Budget | Best fusion | Mean grad_improvement |
+| --- | --- | ---: |
+| 0.05 | `add_2.0` | 406,376 |
+| 0.10 | `add_0.75` | 249,425 |
+| 0.20 | `add_0.25` | 206,741 |
+
+window 8 最优：
+
+| Budget | Best fusion | Mean grad_improvement |
+| --- | --- | ---: |
+| 0.05 | `add_1.5` | 416,035 |
+| 0.10 | `soft_or_1.5` / `gated_1.5` | 248,450 |
+| 0.20 | `add_0.25` | 208,052 |
+
+关键判断：
+
+- relation signal 的价值主要出现在低预算 token selection。
+- additive fusion 比 parameter-free Soft-OR 更能把 relation signal 推进 top selection。
+- 大预算下需要更小的 lambda，否则 relation 会带来噪声。
+- window8 在 5% / 20% budget 上略优，但 `corr_relation_improvement` 低于 window16；不能简单说 window8 更好。
+
+路线修正：
+
+> 下一步不继续扩大 proxy 数据；先做小规模真实更新验证，比较 random / TIP / LR-TIP additive 选点后，student 是否真的在 held-out loss 上有提升。
+
+候选蒸馏设置：
+
+| Selector | Reason |
+| --- | --- |
+| random | 下界 |
+| TIP Soft-OR | 现有 baseline |
+| LR-TIP add, `lambda=1.5`, window8, budget 0.05 | 低预算 proxy 最强 |
+| LR-TIP add, `lambda=0.75`, window16, budget 0.10 | 中预算较稳 |
+| LR-TIP add, `lambda=0.25`, window8/window16, budget 0.20 | 大预算较稳 |
+
+## 14. 小规模蒸馏 uplift 验证
+
+目的：
+
+- gradient-improvement 是 proxy，不等于真实训练提升。
+- 必须验证选中的 token 用于一次小规模 KL 蒸馏更新后，held-out fixed rollouts 上的 teacher KL 是否下降。
+
+脚本：
+
+```text
+agopd/experiments/distillation_uplift_eval.py
+```
+
+当前已启动的 pilot：
+
+```text
+outputs/lr_tip_distill_uplift_real16_budget005
+```
+
+配置：
+
+```text
+train prompts: 16
+eval prompts: 16
+max_new_tokens: 64
+budget: 0.05
+epochs: 1
+optimizer: SGD
+lr: 1e-7
+eval metric: held-out teacher KL on fixed base-student rollouts
+```
+
+对照：
+
+| Selector | Output |
+| --- | --- |
+| random | `outputs/lr_tip_distill_uplift_real16_budget005/random` |
+| divergence | `outputs/lr_tip_distill_uplift_real16_budget005/divergence` |
+| TIP Soft-OR | `outputs/lr_tip_distill_uplift_real16_budget005/tip` |
+| LR-TIP additive | `outputs/lr_tip_distill_uplift_real16_budget005/lr_tip_add_w8_lam15` |
+
+判断标准：
+
+- `eval_kl_delta < 0` 表示 held-out KL 改善。
+- LR-TIP additive 需要至少优于 TIP 和 random，才值得进入更大训练。
+- 如果所有 selector 都不改善，需要先调学习率/训练稳定性，而不是扩大数据。
+
+## 13. 下一步融合策略验证
 
 当前代码已加入三种 full LR-TIP ranking：
 

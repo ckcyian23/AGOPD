@@ -199,6 +199,59 @@ def compute_student_entropy(
     return scores
 
 
+def compute_teacher_nll_advantage(
+    logits_teacher: Any,
+    logits_student: Any,
+    input_ids: Any,
+    attention_mask: Any | None = None,
+    chunk_size: int | None = None,
+) -> Any:
+    """Compute token-level teacher advantage on observed next-token NLL.
+
+    Positive values mean the teacher assigns higher probability to the observed
+    next token than the student does. This is a diagnostic only, not the
+    gradient-norm training-improvement proxy.
+
+    ``student_nll - teacher_nll = log P_teacher(y_t) - log P_student(y_t)``.
+    """
+
+    torch, F = _require_torch()
+    if logits_teacher.shape != logits_student.shape:
+        raise ValueError(
+            "Teacher and student logits must have the same shape. "
+            f"Got {tuple(logits_teacher.shape)} and {tuple(logits_student.shape)}."
+        )
+    if input_ids.shape[:2] != logits_teacher.shape[:2]:
+        raise ValueError(
+            "input_ids and logits must share [B, T]. "
+            f"Got {tuple(input_ids.shape)} and {tuple(logits_teacher.shape)}."
+        )
+
+    bsz, seq_len, _ = logits_teacher.shape
+    if chunk_size is None or chunk_size <= 0:
+        chunk_size = max(1, seq_len - 1)
+
+    scores = torch.zeros(
+        (bsz, seq_len), dtype=torch.float32, device=logits_teacher.device
+    )
+    labels = input_ids.to(device=logits_teacher.device)
+    for start in range(0, max(seq_len - 1, 0), chunk_size):
+        end = min(start + chunk_size, seq_len - 1)
+        target = labels[:, start + 1 : end + 1].unsqueeze(-1)
+        teacher_logp = F.log_softmax(
+            logits_teacher[:, start:end, :].float(), dim=-1
+        ).gather(-1, target)
+        student_logp = F.log_softmax(
+            logits_student[:, start:end, :].float(), dim=-1
+        ).gather(-1, target)
+        scores[:, start + 1 : end + 1] = (teacher_logp - student_logp).squeeze(-1)
+
+    if attention_mask is not None:
+        mask = attention_mask.to(device=scores.device, dtype=torch.bool)
+        scores = scores.masked_fill(~mask, 0.0)
+    return scores
+
+
 def compute_relation_disagreement(
     hidden_teacher: Any,
     hidden_student: Any,
