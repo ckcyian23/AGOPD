@@ -21,6 +21,7 @@ Quick 24GB GPU run:
 
 ```powershell
 uv sync
+uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.device_count())"
 uv run pytest -q
 uv run python -m agopd.experiments.offline_lr_tip_eval `
   --prompts-file data/prompts.jsonl `
@@ -31,3 +32,7 @@ uv run python -m agopd.experiments.offline_lr_tip_eval `
   --dtype float16 `
   --budgets 0.05,0.1,0.2
 ```
+
+`pyproject.toml` points `torch` to the PyTorch CUDA 12.8 wheel index on
+Windows/Linux. `uv.lock` is intentionally not committed because the correct
+PyTorch wheel depends on the experiment machine's CUDA/driver setup.

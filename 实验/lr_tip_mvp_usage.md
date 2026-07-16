@@ -4,8 +4,33 @@
 
 ## 1. 准备环境
 
+本项目在 `pyproject.toml` 中把 Windows/Linux 的 `torch` 指向 PyTorch CUDA 12.8 wheel index。`uv.lock` 不提交到仓库，避免在 CPU 机器上生成的 lock 文件导致 GPU 机器安装 `torch+cpu`。
+
 ```powershell
 uv sync
+```
+
+同步后先检查 PyTorch 是否为 CUDA 版：
+
+```powershell
+uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.device_count())"
+```
+
+期望看到类似：
+
+```text
+2.x.x+cu128
+True
+2
+```
+
+如果误装成 `+cpu`，直接重建环境：
+
+```powershell
+Remove-Item -Recurse -Force .venv
+Remove-Item -Force uv.lock -ErrorAction SilentlyContinue
+uv sync
+uv run python -c "import torch; print(torch.__version__); print(torch.cuda.is_available()); print(torch.cuda.device_count())"
 ```
 
 如果迁移机器没有使用 uv，也可以按 `pyproject.toml` 安装 `torch`、`transformers`、`accelerate`、`datasets`、`numpy`、`tqdm`。

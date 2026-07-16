@@ -9,5 +9,6 @@ outputs/
 
 # Virtual environments
 .venv
+uv.lock
 
 models/
