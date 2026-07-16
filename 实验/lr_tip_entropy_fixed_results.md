@@ -901,6 +901,138 @@ outputs/lr_tip_distill_uplift_product_add_offset32
 - 只用 output KL 更新，不一定会修复 hidden relation mismatch。
 - 如果 LR-TIP 的核心是 relation signal，那么 relation 应该进入训练目标或辅助目标，而不是只进入 selection。
 
+## 15. Relation-aware uplift 验证
+
+脚本已扩展：
+
+```text
+agopd/experiments/distillation_uplift_eval.py
+```
+
+新增参数：
+
+```text
+--relation-loss-weight
+```
+
+训练目标：
+
+```text
+loss = output_KL + mu * relation_profile_loss
+```
+
+评估指标：
+
+- `eval_kl_delta`
+- `eval_relation_delta`
+
+### 15.1 offset32 / budget 0.05 / relation loss 0.1
+
+输出：
+
+```text
+outputs/lr_tip_relation_aware_uplift_offset32_b005
+```
+
+| Selector | Relation loss weight | Eval KL delta | Eval relation delta |
+| --- | ---: | ---: | ---: |
+| TIP | 0.0 | -0.000124 | +0.000000104 |
+| TIP | 0.1 | -0.000111 | -0.000000113 |
+| LR-TIP product-add | 0.1 | -0.000031 | -0.000000219 |
+| Divergence | 0.1 | -0.000145 | -0.000000409 |
+
+解释：
+
+- relation-aware loss 确实能让 held-out relation discrepancy 下降。
+- 但当前最好的综合结果是 divergence selector + relation loss。
+- LR-TIP product-add 对 relation metric 有改善，但 output KL 改善太弱。
+- 这说明目前问题不只是 selector 公式，可能是 relation signal 与 output-KL uplift 的耦合方式还不对。
+
+下一步诊断：
+
+```text
+outputs/lr_tip_relation_selector_uplift_offset32_b005
+```
+
+目的：
+
+- 用 pure relation selector 配合 relation loss。
+- 判断 `D_R` 是否至少能稳定改善 held-out relation discrepancy。
+- 如果 pure relation selector 也不强，则现有 `D_R` 更适合作为分析/辅助信号，不适合直接选点。
+
+### 15.2 pure relation selector 结果
+
+输出：
+
+```text
+outputs/lr_tip_relation_selector_uplift_offset32_b005
+```
+
+| Selector | Relation loss weight | Eval KL delta | Eval relation delta |
+| --- | ---: | ---: | ---: |
+| relation | 0.1 | -0.000018 | -0.000000162 |
+| relation | 1.0 | -0.000047 | -0.000000323 |
+
+解释：
+
+- pure relation selector 可以降低 held-out relation discrepancy。
+- 但它没有超过 divergence selector + relation loss：
+  - divergence + relation loss: `eval_kl_delta=-0.000145`, `eval_relation_delta=-0.000000409`
+  - relation selector, mu=1.0: `eval_kl_delta=-0.000047`, `eval_relation_delta=-0.000000323`
+- 当前证据不支持把 `D_R` 直接作为主 token selector。
+
+路线修正：
+
+> 现阶段最有希望的路线不是“relation selector”，而是“output-disagreement/TIP selector + relation-aware auxiliary loss”。下一步在 offset0 上复现 relation-aware loss，看是否跨 split 稳定。
+
+正在运行：
+
+```text
+outputs/lr_tip_relation_aware_uplift_offset0_b005
+```
+
+### 15.3 offset0 / budget 0.05 / relation-aware 结果
+
+输出：
+
+```text
+outputs/lr_tip_relation_aware_uplift_offset0_b005
+```
+
+| Selector | Relation loss weight | Eval KL delta | Eval relation delta |
+| --- | ---: | ---: | ---: |
+| divergence | 0.1 | -0.000294 | -0.000000599 |
+| TIP | 0.1 | -0.000286 | -0.000002631 |
+| LR-TIP additive | 0.1 | -0.000197 | -0.000002348 |
+| relation | 1.0 | -0.000061 | -0.000001033 |
+
+对比已有纯 KL：
+
+- offset0 pure divergence: `eval_kl_delta=-0.000216`
+- offset0 pure TIP: `eval_kl_delta=-0.000173`
+- offset0 pure LR-TIP additive: `eval_kl_delta=-0.000299`
+
+解释：
+
+- relation-aware loss 明显增强了 divergence 和 TIP selector 的 uplift。
+- TIP + relation loss 的 held-out relation 改善最大。
+- LR-TIP additive 加 relation loss 后反而弱于纯 LR-TIP additive，说明当前 LR-TIP selector 不稳定。
+
+路线 pivot：
+
+> 当前最有希望的方向是“TIP/divergence selector + relation-profile auxiliary loss”，而不是“直接用 D_R 改 token selector”。
+
+下一步：
+
+```text
+outputs/lr_tip_relation_aware_uplift_offset64_b005
+```
+
+目的：
+
+- 在第三个 split 上验证 TIP/divergence + relation loss 是否稳定。
+- 如果 offset64 仍成立，再扩大到 train/eval 32 prompts。
+
 ## 13. 下一步融合策略验证
 
 当前代码已加入三种 full LR-TIP ranking：
