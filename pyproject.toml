@@ -4,4 +4,20 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "accelerate>=1.0.0",
+    "datasets>=3.0.0",
+    "modelscope>=1.38.1",
+    "numpy>=1.26.0",
+    "torch>=2.4.0",
+    "tqdm>=4.66.0",
+    "transformers>=4.51.0",
+]
+
+[project.scripts]
+lr-tip-eval = "agopd.experiments.offline_lr_tip_eval:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
