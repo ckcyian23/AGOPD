@@ -92,6 +92,27 @@ def parse_args() -> argparse.Namespace:
             "is KL(P_teacher || P_student); reverse is KL(P_student || P_teacher)."
         ),
     )
+    parser.add_argument(
+        "--lr-tip-full-mode",
+        default="soft_or",
+        choices=["soft_or", "add", "gated"],
+        help=(
+            "Full LR-TIP fusion used for selection: parameter-free Soft-OR, "
+            "additive TIP+lambda*R, or gated additive TIP+lambda*R*(1-TIP)."
+        ),
+    )
+    parser.add_argument(
+        "--relation-gamma",
+        type=float,
+        default=1.0,
+        help="Relation scale for Soft-OR full fusion.",
+    )
+    parser.add_argument(
+        "--relation-lambda",
+        type=float,
+        default=1.0,
+        help="Relation scale for add/gated full fusion.",
+    )
     return parser.parse_args()
 
 
@@ -284,6 +305,9 @@ def score_one(
         output_chunk_size=args.output_chunk_size,
         shift_output_to_labels=True,
         output_kl_direction=args.output_kl_direction,
+        relation_gamma=args.relation_gamma,
+        relation_lambda=args.relation_lambda,
+        lr_tip_full_mode=args.lr_tip_full_mode,
     )
     token_mask = sample["target_mask"]
     corr = pearson_corr(
@@ -304,7 +328,7 @@ def score_one(
         random_seed=args.seed,
         student_entropy=scores.student_entropy,
         tip_importance=scores.tip_soft_or,
-        lr_tip_full_importance=scores.lr_tip_soft_or,
+        lr_tip_full_importance=scores.lr_tip_full,
     )
     return {
         "prompt": sample["prompt"],

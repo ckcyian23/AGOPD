@@ -61,6 +61,59 @@ def test_soft_or_is_parameter_free_union_score():
     assert torch.allclose(scores, torch.tensor([[0.0, 0.75, 1.0]]))
 
 
+def test_lr_tip_full_modes_are_selectable():
+    from agopd.lr_tip import compute_lr_tip
+
+    teacher_hidden = torch.randn(1, 5, 8)
+    student_hidden = torch.randn(1, 5, 6)
+    teacher_logits = torch.randn(1, 5, 13)
+    student_logits = torch.randn(1, 5, 13)
+    mask = torch.tensor([[1, 1, 1, 1, 0]], dtype=torch.bool)
+
+    soft_or = compute_lr_tip(
+        teacher_hidden,
+        student_hidden,
+        teacher_logits,
+        student_logits,
+        attention_mask=mask,
+        lr_tip_full_mode="soft_or",
+    )
+    add = compute_lr_tip(
+        teacher_hidden,
+        student_hidden,
+        teacher_logits,
+        student_logits,
+        attention_mask=mask,
+        lr_tip_full_mode="add",
+        relation_lambda=0.5,
+    )
+    gated = compute_lr_tip(
+        teacher_hidden,
+        student_hidden,
+        teacher_logits,
+        student_logits,
+        attention_mask=mask,
+        lr_tip_full_mode="gated",
+        relation_lambda=0.5,
+    )
+
+    assert torch.allclose(soft_or.lr_tip_full, soft_or.lr_tip_soft_or)
+    assert torch.allclose(add.lr_tip_full, add.lr_tip_add)
+    assert torch.allclose(gated.lr_tip_full, gated.lr_tip_gated)
+    assert soft_or.lr_tip_full[0, 4].item() == 0.0
+    assert add.lr_tip_full[0, 4].item() == 0.0
+    assert gated.lr_tip_full[0, 4].item() == 0.0
+
+    with pytest.raises(ValueError):
+        compute_lr_tip(
+            teacher_hidden,
+            student_hidden,
+            teacher_logits,
+            student_logits,
+            lr_tip_full_mode="bad",
+        )
+
+
 def test_output_disagreement_supports_kl_direction():
     from agopd.lr_tip import compute_output_disagreement
 

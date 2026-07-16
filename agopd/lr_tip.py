@@ -26,6 +26,9 @@ class LRTipScores:
     relation_norm: Any
     tip_soft_or: Any
     lr_tip_soft_or: Any
+    lr_tip_add: Any
+    lr_tip_gated: Any
+    lr_tip_full: Any
 
 
 def _require_torch():
@@ -261,6 +264,9 @@ def compute_lr_tip(
     huber_delta: float = 1.0,
     entropy_clip_quantile: float | None = 0.98,
     output_kl_direction: str = "forward",
+    relation_gamma: float = 1.0,
+    relation_lambda: float = 1.0,
+    lr_tip_full_mode: str = "soft_or",
 ) -> LRTipScores:
     """Compute fused LR-TIP importance.
 
@@ -303,14 +309,34 @@ def compute_lr_tip(
     )
     output_norm = masked_minmax(do, attention_mask)
     relation_norm = masked_minmax(dr, attention_mask)
+    if relation_gamma < 0.0:
+        raise ValueError("relation_gamma must be >= 0.")
+    if relation_lambda < 0.0:
+        raise ValueError("relation_lambda must be >= 0.")
+    if lr_tip_full_mode not in {"soft_or", "add", "gated"}:
+        raise ValueError("lr_tip_full_mode must be 'soft_or', 'add', or 'gated'.")
+
     tip_soft_or = soft_or(entropy_norm, output_norm)
-    lr_tip_soft_or = soft_or(entropy_norm, output_norm, relation_norm)
+    relation_soft_or_norm = (relation_norm * relation_gamma).clamp(0.0, 1.0)
+    lr_tip_soft_or = soft_or(entropy_norm, output_norm, relation_soft_or_norm)
+    lr_tip_add = (tip_soft_or + relation_lambda * relation_norm).clamp(0.0, 1.0)
+    lr_tip_gated = (
+        tip_soft_or + relation_lambda * relation_norm * (1.0 - tip_soft_or)
+    ).clamp(0.0, 1.0)
+    lr_tip_full = {
+        "soft_or": lr_tip_soft_or,
+        "add": lr_tip_add,
+        "gated": lr_tip_gated,
+    }[lr_tip_full_mode]
     if attention_mask is not None:
         torch, _ = _require_torch()
         mask = attention_mask.to(device=importance.device, dtype=torch.bool)
         importance = importance.masked_fill(~mask, 0.0)
         tip_soft_or = tip_soft_or.masked_fill(~mask, 0.0)
         lr_tip_soft_or = lr_tip_soft_or.masked_fill(~mask, 0.0)
+        lr_tip_add = lr_tip_add.masked_fill(~mask, 0.0)
+        lr_tip_gated = lr_tip_gated.masked_fill(~mask, 0.0)
+        lr_tip_full = lr_tip_full.masked_fill(~mask, 0.0)
 
     return LRTipScores(
         importance=importance,
@@ -324,4 +350,7 @@ def compute_lr_tip(
         relation_norm=relation_norm,
         tip_soft_or=tip_soft_or,
         lr_tip_soft_or=lr_tip_soft_or,
+        lr_tip_add=lr_tip_add,
+        lr_tip_gated=lr_tip_gated,
+        lr_tip_full=lr_tip_full,
     )

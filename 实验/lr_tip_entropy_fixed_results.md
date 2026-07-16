@@ -498,3 +498,32 @@ cd /data_b/qtwei/ckcyi/AGOPD
 - LR-TIP full 是否仍稳定提高 `D_R` density。
 - full Soft-OR 与 TIP overlap 是否继续接近但小于 1。
 - 规模变大后 window=8 是否仍值得作为主设置候选。
+
+## 12. 下一步融合策略验证
+
+当前代码已加入三种 full LR-TIP ranking：
+
+```text
+soft_or: S = SoftOR(H_norm, D_norm, gamma * R_norm)
+add:     S = TIP_SoftOR + lambda * R_norm
+gated:   S = TIP_SoftOR + lambda * R_norm * (1 - TIP_SoftOR)
+```
+
+默认仍是 `soft_or`，因此已完成和正在运行的结果不受影响。
+
+待跑矩阵：
+
+| Run | Purpose |
+| --- | --- |
+| `--lr-tip-full-mode soft_or --relation-gamma 0.5` | 检查降低 relation 强度后是否仍有稳定收益 |
+| `--lr-tip-full-mode soft_or --relation-gamma 2.0` | 检查加强 relation 后 overlap 是否下降 |
+| `--lr-tip-full-mode add --relation-lambda 0.25` | 轻量 additive 补充 relation signal |
+| `--lr-tip-full-mode add --relation-lambda 0.5` | 中等 additive 补充 |
+| `--lr-tip-full-mode gated --relation-lambda 0.5` | 只在 TIP 未覆盖充分的位置补 relation |
+| `--lr-tip-full-mode gated --relation-lambda 1.0` | gated 强补充，对比 parameter-free Soft-OR |
+
+优先级：
+
+1. 等 1024-shard main 合并完成。
+2. 如果 1024 结论稳定，先在 128 prompts / 256 tokens 上跑融合小矩阵。
+3. 从小矩阵选 1-2 个最好的融合设置，再扩到 1024 prompts。
