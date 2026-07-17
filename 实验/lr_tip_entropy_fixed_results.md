@@ -1392,6 +1392,7 @@ CUDA_VISIBLE_DEVICES=0 .venv/bin/python -m agopd.experiments.distillation_uplift
   --dtype float16 \
   --lr 1e-7 \
   --epochs 1 \
+  --save-rollouts \
   --eval-regenerate-after \
   --save-student-dir outputs/checkpoints/tip_rel1000_train256 \
   --output-dir outputs/lr_tip_formal_train256_tip_rel1000 \
@@ -1403,3 +1404,4 @@ CUDA_VISIBLE_DEVICES=0 .venv/bin/python -m agopd.experiments.distillation_uplift
 - fixed-rollout `eval_kl_delta` 继续优于 pure TIP。
 - `eval_regenerated_kl_after` 不明显坏于 fixed-rollout after。
 - 保存的 student checkpoint 可用于后续 answer quality / task accuracy proxy。
+- `eval_rollouts_before.jsonl` 与 `eval_rollouts_after.jsonl` 可用于人工抽查和 answer quality proxy。

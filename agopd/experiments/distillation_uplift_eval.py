@@ -88,6 +88,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Regenerate eval rollouts with the trained student and report KL/relation metrics.",
     )
+    parser.add_argument(
+        "--save-rollouts",
+        action="store_true",
+        help="Write eval rollout prompts/responses before and after training as JSONL.",
+    )
     return parser.parse_args()
 
 
@@ -395,6 +400,20 @@ def prepare_eval_samples(
     return samples
 
 
+def write_rollouts(path: Path, samples: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for idx, sample in enumerate(samples):
+            item = {
+                "index": idx,
+                "prompt": sample["prompt"],
+                "response": sample["response"],
+                "prompt_len": sample["prompt_len"],
+                "num_target_tokens": int(sample["target_mask"].sum().item()),
+            }
+            handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
 def main() -> None:
     args = parse_args()
     if not 0.0 < args.budget <= 1.0:
@@ -441,6 +460,8 @@ def main() -> None:
         )
     eval_samples = []
     eval_samples = prepare_eval_samples(torch, tokenizer, student, eval_prompts, args)
+    if args.save_rollouts or args.eval_regenerate_after:
+        write_rollouts(args.output_dir / "eval_rollouts_before.jsonl", eval_samples)
 
     eval_before = evaluate_kl(torch, student, teacher, eval_samples)
     eval_relation_before = evaluate_relation(torch, student, teacher, eval_samples, args)
@@ -449,10 +470,13 @@ def main() -> None:
     eval_relation_after = evaluate_relation(torch, student, teacher, eval_samples, args)
     eval_regenerated_kl_after = None
     eval_regenerated_relation_after = None
+    regenerated_rollouts_path = None
     if args.eval_regenerate_after:
         regenerated_eval_samples = prepare_eval_samples(
             torch, tokenizer, student, eval_prompts, args
         )
+        regenerated_rollouts_path = args.output_dir / "eval_rollouts_after.jsonl"
+        write_rollouts(regenerated_rollouts_path, regenerated_eval_samples)
         eval_regenerated_kl_after = evaluate_kl(
             torch, student, teacher, regenerated_eval_samples
         )
@@ -489,6 +513,14 @@ def main() -> None:
             ),
             "eval_regenerated_kl_after": eval_regenerated_kl_after,
             "eval_regenerated_relation_after": eval_regenerated_relation_after,
+            "eval_rollouts_before": (
+                str(args.output_dir / "eval_rollouts_before.jsonl")
+                if args.save_rollouts or args.eval_regenerate_after
+                else None
+            ),
+            "eval_rollouts_after": (
+                str(regenerated_rollouts_path) if regenerated_rollouts_path else None
+            ),
             "train_loss_first": train_losses[0] if train_losses else None,
             "train_loss_last": train_losses[-1] if train_losses else None,
             "selected_tokens": selected_tokens,
