@@ -1346,43 +1346,22 @@ budget: 0.05
 compare: output_KL vs output_KL + 1000 * relation_profile_loss
 ```
 
-正在运行：
+当前状态：
+
+- 该最大 split 已经在远程 tmux 启动。
+- 最近 SSH 到 `172.23.148.118` 连续超时，暂时无法读取结果。
+- 恢复连接后优先读取：
 
 ```text
-outputs/lr_tip_relation_loss_scale_tip64_mu1000/offset32_tip_kl
-outputs/lr_tip_relation_loss_scale_tip64_mu1000/offset32_tip_rel1000
+outputs/lr_tip_relation_loss_scale_tip256_mu1000/tip_kl/report.json
+outputs/lr_tip_relation_loss_scale_tip256_mu1000/tip_rel1000/report.json
 ```
 
-目的：
+如果 train256/eval256 继续成立：
 
-- 补齐 offset32 的 train64/eval64 结果。
-- 如果 offset32 也成立，则可以进入更正式的训练验证或写成核心实验结论。
-
-## 13. 下一步融合策略验证
-
-当前代码已加入三种 full LR-TIP ranking：
-
-```text
-soft_or: S = SoftOR(H_norm, D_norm, gamma * R_norm)
-add:     S = TIP_SoftOR + lambda * R_norm
-gated:   S = TIP_SoftOR + lambda * R_norm * (1 - TIP_SoftOR)
-```
-
-默认仍是 `soft_or`，因此已完成和正在运行的结果不受影响。
-
-待跑矩阵：
-
-| Run | Purpose |
-| --- | --- |
-| `--lr-tip-full-mode soft_or --relation-gamma 0.5` | 检查降低 relation 强度后是否仍有稳定收益 |
-| `--lr-tip-full-mode soft_or --relation-gamma 2.0` | 检查加强 relation 后 overlap 是否下降 |
-| `--lr-tip-full-mode add --relation-lambda 0.25` | 轻量 additive 补充 relation signal |
-| `--lr-tip-full-mode add --relation-lambda 0.5` | 中等 additive 补充 |
-| `--lr-tip-full-mode gated --relation-lambda 0.5` | 只在 TIP 未覆盖充分的位置补 relation |
-| `--lr-tip-full-mode gated --relation-lambda 1.0` | gated 强补充，对比 parameter-free Soft-OR |
-
-优先级：
-
-1. 等 1024-shard main 合并完成。
-2. 如果 1024 结论稳定，先在 128 prompts / 256 tokens 上跑融合小矩阵。
-3. 从小矩阵选 1-2 个最好的融合设置，再扩到 1024 prompts。
+1. 将 TIP-selected relation-aware distillation 作为当前核心方法候选。
+2. 下一步进入更正式训练脚本，而不是继续做 token ranking 公式微调。
+3. 需要补充 ablation：
+   - relation loss weight: 300 / 1000 / 3000
+   - budget: 0.05 / 0.10
+   - held-out answer quality 或 task accuracy proxy
