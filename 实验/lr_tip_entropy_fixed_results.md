@@ -1033,6 +1033,226 @@ outputs/lr_tip_relation_aware_uplift_offset64_b005
 - 在第三个 split 上验证 TIP/divergence + relation loss 是否稳定。
 - 如果 offset64 仍成立，再扩大到 train/eval 32 prompts。
 
+### 15.4 offset64 / budget 0.05 / relation-aware 结果
+
+输出：
+
+```text
+outputs/lr_tip_relation_aware_uplift_offset64_b005
+```
+
+| Selector | Relation loss weight | Eval KL delta | Eval relation delta |
+| --- | ---: | ---: | ---: |
+| random | 0.0 | -0.000092 | +0.000000903 |
+| TIP | 0.0 | -0.000103 | -0.000000283 |
+| TIP | 0.1 | -0.000420 | -0.000000274 |
+| divergence | 0.1 | -0.000279 | +0.000000260 |
+
+解释：
+
+- offset64 上，TIP + relation loss 显著优于 pure TIP、random 和 divergence + relation loss。
+- 这是目前最强的正向提升信号。
+- relation metric 的变化很小，但 output KL 改善明显，说明 relation loss 可能起到正则/辅助优化作用。
+
+跨 split 当前观察：
+
+| Split | Pure TIP KL delta | TIP + relation KL delta | Winner |
+| --- | ---: | ---: | --- |
+| offset0 | -0.000173 | -0.000286 | TIP + relation |
+| offset32 | -0.000124 | -0.000111 | Pure TIP |
+| offset64 | -0.000103 | -0.000420 | TIP + relation |
+
+下一步：
+
+> 扩大到 train32/eval32，减少小 split 噪声。只比较 pure TIP 与 TIP + relation loss。
+
+正在运行：
+
+```text
+outputs/lr_tip_relation_aware_tip32_compare
+```
+
+### 15.5 train32/eval32 TIP vs TIP+relation 结果
+
+输出：
+
+```text
+outputs/lr_tip_relation_aware_tip32_compare
+```
+
+| Split | Selector | Relation loss weight | Eval KL delta | Eval relation delta |
+| --- | --- | ---: | ---: | ---: |
+| offset0 | TIP | 0.0 | -0.000336 | -0.000001263 |
+| offset0 | TIP | 0.1 | -0.000385 | -0.000001504 |
+| offset64 | TIP | 0.0 | -0.000271 | -0.000000091 |
+| offset64 | TIP | 0.1 | -0.000269 | +0.000000102 |
+
+解释：
+
+- train32/eval32 下，relation loss weight 0.1 的收益变弱。
+- offset0 略有提升，offset64 基本持平/略差。
+- 这说明 16/16 小 split 的强正结果存在噪声。
+
+重大问题：
+
+> relation_profile_loss 的数值约为 `1e-3`，而 output KL loss 通常是 `1e-1` 到 `1e0`。因此 `mu=0.1` 的实际贡献约 `1e-4`，几乎不会影响训练。
+
+路线修正：
+
+> 需要重新做 relation-aware loss 权重标定。下一步测试 `mu=100` / `mu=1000`，让 relation loss 与 KL loss 进入同一数量级。否则 relation-aware 结论不可靠。
+
+### 15.6 relation loss 权重标定结果
+
+输出：
+
+```text
+outputs/lr_tip_relation_loss_scale_offset64_b005
+```
+
+配置：
+
+```text
+split: offset64
+train/eval: 16/16
+selector: TIP
+budget: 0.05
+lr: 1e-7
+```
+
+| Relation loss weight | Eval KL delta | Eval relation delta |
+| ---: | ---: | ---: |
+| 0 | -0.000141 | +0.000000697 |
+| 100 | -0.000075 | -0.000000300 |
+| 1000 | -0.000762 | -0.000013838 |
+
+关键发现：
+
+- `mu=0.1` 和 `mu=100` 都没有把 relation loss 的作用充分打出来。
+- `mu=1000` 显著改善 held-out KL，并大幅降低 held-out relation discrepancy。
+- 这说明 relation-aware loss 方向是可行的，但必须正确做 loss scale calibration。
+
+当前最强候选：
+
+```text
+selector: TIP Soft-OR
+training loss: output_KL + 1000 * relation_profile_loss
+budget: 0.05
+```
+
+正在运行复验：
+
+```text
+outputs/lr_tip_relation_loss_scale_multi_b005
+```
+
+目的：
+
+- 在 offset0 / offset32 上复验 `mu=1000`。
+- 如果多 split 都优于 pure TIP，则进入 train32/eval32 或更大训练验证。
+
+### 15.7 mu=1000 多 split 16/16 复验
+
+输出：
+
+```text
+outputs/lr_tip_relation_loss_scale_multi_b005
+outputs/lr_tip_relation_loss_scale_offset64_b005
+```
+
+配置：
+
+```text
+selector: TIP Soft-OR
+budget: 0.05
+train/eval: 16/16
+loss: output_KL + 1000 * relation_profile_loss
+lr: 1e-7
+```
+
+| Split | Pure TIP KL delta | TIP + relation1000 KL delta | Pure TIP relation delta | TIP + relation1000 relation delta |
+| --- | ---: | ---: | ---: | ---: |
+| offset0 | -0.000173 | -0.000448 | n/a | -0.000009787 |
+| offset32 | -0.000124 | -0.000772 | +0.000000104 | -0.000013928 |
+| offset64 | -0.000141 | -0.000762 | +0.000000697 | -0.000013838 |
+
+解释：
+
+- `mu=1000` 在三个 split 上都显著增强 held-out KL 改善。
+- `mu=1000` 同时稳定降低 held-out relation discrepancy。
+- 这是目前最可靠的提升验证结果。
+- 关键不在于 `D_R` selector，而在于 relation-profile auxiliary training loss 的尺度正确。
+
+当前最强方法候选：
+
+```text
+Selector: TIP Soft-OR
+Training: output_KL + 1000 * relation_profile_loss
+Budget: 0.05
+Layer: -2
+Window: 16
+```
+
+正在扩大验证：
+
+```text
+outputs/lr_tip_relation_loss_scale_tip32_mu1000
+```
+
+目的：
+
+- train/eval 从 16/16 扩大到 32/32。
+- offset0 / offset32 / offset64 复验 `mu=1000` 的稳定性。
+
+### 15.8 train32/eval32 / mu=1000 扩大验证
+
+输出：
+
+```text
+outputs/lr_tip_relation_loss_scale_tip32_mu1000
+```
+
+配置：
+
+```text
+selector: TIP Soft-OR
+budget: 0.05
+train/eval: 32/32
+loss: output_KL + 1000 * relation_profile_loss
+lr: 1e-7
+```
+
+| Split | Pure TIP KL delta | TIP+rel1000 KL delta | Pure TIP relation delta | TIP+rel1000 relation delta |
+| --- | ---: | ---: | ---: | ---: |
+| offset0 | -0.000336 | -0.001011 | -0.000001263 | -0.000018345 |
+| offset32 | -0.000376 | -0.001213 | -0.000001348 | -0.000024927 |
+| offset64 | -0.000271 | -0.001056 | -0.000000091 | -0.000020311 |
+
+解释：
+
+- train32/eval32 下，TIP+rel1000 在三个 split 上全部明显优于 pure TIP。
+- held-out relation discrepancy 稳定下降约 2% 到 3%。
+- 这是目前最强的可行性 + 提升验证结果。
+
+当前可信候选方法：
+
+```text
+TIP-selected relation-aware distillation
+S = TIP Soft-OR for token selection
+L = output_KL + 1000 * relation_profile_loss
+budget = 0.05
+```
+
+下一步：
+
+```text
+outputs/lr_tip_relation_loss_scale_tip64_mu1000
+```
+
+目的：
+
+- train/eval 扩大到 64/64。
+- 在 offset0 / offset64 两个 split 上继续复验。
+
 ## 13. 下一步融合策略验证
 
 当前代码已加入三种 full LR-TIP ranking：
