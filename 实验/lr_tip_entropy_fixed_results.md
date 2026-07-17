@@ -1307,6 +1307,45 @@ Splits：
 - 用更大样本验证 train64/eval64 结论。
 - 如果仍稳定，TIP-selected relation-aware distillation 可以作为当前核心方法结论。
 
+### 15.11 train128/eval128 / mu=1000 结果
+
+输出：
+
+```text
+outputs/lr_tip_relation_loss_scale_tip128_mu1000
+```
+
+| Split | Pure TIP KL delta | TIP+rel1000 KL delta | Pure TIP relation delta | TIP+rel1000 relation delta |
+| --- | ---: | ---: | ---: | ---: |
+| offset0 | -0.000908 | -0.003060 | -0.000003383 | -0.000058527 |
+| offset256 | -0.001222 | -0.002441 | -0.000003528 | -0.000042788 |
+
+解释：
+
+- train128/eval128 下，TIP+rel1000 仍显著优于 pure TIP。
+- 两个 split 不重叠，说明结果不是某个局部数据段偶然。
+- held-out relation discrepancy 下降约 5.6% 到 7.2%。
+
+当前最强结论：
+
+> 在真实 GSM8K/MATH-500 mixed prompts 上，TIP-selected relation-aware distillation (`output_KL + 1000 * relation_profile_loss`) 比 pure TIP output-KL distillation 更稳定地改善 held-out KL 与 relation discrepancy。
+
+正在运行最大 split：
+
+```text
+outputs/lr_tip_relation_loss_scale_tip256_mu1000
+```
+
+配置：
+
+```text
+train: rows 0-255
+eval: rows 256-511
+selector: TIP Soft-OR
+budget: 0.05
+compare: output_KL vs output_KL + 1000 * relation_profile_loss
+```
+
 正在运行：
 
 ```text
