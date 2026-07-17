@@ -77,6 +77,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-chunk-size", type=int, default=8)
     parser.add_argument("--progress-every", type=int, default=1)
+    parser.add_argument(
+        "--save-student-dir",
+        type=Path,
+        default=None,
+        help="Optional directory for saving the trained student checkpoint.",
+    )
+    parser.add_argument(
+        "--eval-regenerate-after",
+        action="store_true",
+        help="Regenerate eval rollouts with the trained student and report KL/relation metrics.",
+    )
     return parser.parse_args()
 
 
@@ -367,6 +378,23 @@ def train_selected(
     return losses
 
 
+def prepare_eval_samples(
+    torch: Any,
+    tokenizer: Any,
+    student: Any,
+    prompts: list[str],
+    args: argparse.Namespace,
+) -> list[dict[str, Any]]:
+    samples = []
+    for idx, prompt in enumerate(prompts):
+        if args.progress_every > 0:
+            print(f"[prepare eval] {idx + 1}/{len(prompts)}", flush=True)
+        samples.append(
+            prepare_sample(torch, tokenizer, student, None, prompt, args, idx, False)
+        )
+    return samples
+
+
 def main() -> None:
     args = parse_args()
     if not 0.0 < args.budget <= 1.0:
@@ -412,18 +440,31 @@ def main() -> None:
             prepare_sample(torch, tokenizer, student, teacher, prompt, args, idx, True)
         )
     eval_samples = []
-    for idx, prompt in enumerate(eval_prompts):
-        if args.progress_every > 0:
-            print(f"[prepare eval] {idx + 1}/{len(eval_prompts)}", flush=True)
-        eval_samples.append(
-            prepare_sample(torch, tokenizer, student, teacher, prompt, args, idx, False)
-        )
+    eval_samples = prepare_eval_samples(torch, tokenizer, student, eval_prompts, args)
 
     eval_before = evaluate_kl(torch, student, teacher, eval_samples)
     eval_relation_before = evaluate_relation(torch, student, teacher, eval_samples, args)
     train_losses = train_selected(torch, student, teacher, train_samples, args)
     eval_after = evaluate_kl(torch, student, teacher, eval_samples)
     eval_relation_after = evaluate_relation(torch, student, teacher, eval_samples, args)
+    eval_regenerated_kl_after = None
+    eval_regenerated_relation_after = None
+    if args.eval_regenerate_after:
+        regenerated_eval_samples = prepare_eval_samples(
+            torch, tokenizer, student, eval_prompts, args
+        )
+        eval_regenerated_kl_after = evaluate_kl(
+            torch, student, teacher, regenerated_eval_samples
+        )
+        eval_regenerated_relation_after = evaluate_relation(
+            torch, student, teacher, regenerated_eval_samples, args
+        )
+
+    if args.save_student_dir is not None:
+        args.save_student_dir.mkdir(parents=True, exist_ok=True)
+        student.save_pretrained(args.save_student_dir)
+        tokenizer.save_pretrained(args.save_student_dir)
+
     selected_tokens = sum(sample["selected_tokens"] for sample in train_samples)
     target_tokens = sum(sample["target_tokens"] for sample in train_samples)
     report = {
@@ -446,6 +487,8 @@ def main() -> None:
                 if eval_relation_before
                 else None
             ),
+            "eval_regenerated_kl_after": eval_regenerated_kl_after,
+            "eval_regenerated_relation_after": eval_regenerated_relation_after,
             "train_loss_first": train_losses[0] if train_losses else None,
             "train_loss_last": train_losses[-1] if train_losses else None,
             "selected_tokens": selected_tokens,

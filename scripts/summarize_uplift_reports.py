@@ -38,6 +38,8 @@ def main() -> None:
         "kl_after",
         "kl_delta",
         "rel_delta",
+        "regen_kl_after",
+        "regen_rel_after",
         "selected",
     ]
     print("\t".join(header))
@@ -56,6 +58,8 @@ def main() -> None:
             fmt(metrics.get("eval_kl_after")),
             fmt(metrics.get("eval_kl_delta")),
             fmt(metrics.get("eval_relation_delta")),
+            fmt(metrics.get("eval_regenerated_kl_after")),
+            fmt(metrics.get("eval_regenerated_relation_after")),
             f"{metrics.get('selected_tokens')}/{metrics.get('target_tokens')}",
         ]
         print("\t".join(row))

@@ -1365,3 +1365,41 @@ outputs/lr_tip_relation_loss_scale_tip256_mu1000/tip_rel1000/report.json
    - relation loss weight: 300 / 1000 / 3000
    - budget: 0.05 / 0.10
    - held-out answer quality 或 task accuracy proxy
+
+### 15.12 正式训练验证准备
+
+脚本已支持保存 checkpoint 与训练后重新生成评估：
+
+```text
+--save-student-dir
+--eval-regenerate-after
+```
+
+如果 `train256/eval256` 最大 split 继续成立，下一步运行：
+
+```bash
+cd /data_b/qtwei/ckcyi/AGOPD
+CUDA_VISIBLE_DEVICES=0 .venv/bin/python -m agopd.experiments.distillation_uplift_eval \
+  --prompts-file data/real_prompts_512.jsonl \
+  --prompt-offset 0 \
+  --train-limit 256 \
+  --eval-limit 256 \
+  --max-new-tokens 64 \
+  --selector tip \
+  --budget 0.05 \
+  --relation-loss-weight 1000 \
+  --device cuda \
+  --dtype float16 \
+  --lr 1e-7 \
+  --epochs 1 \
+  --eval-regenerate-after \
+  --save-student-dir outputs/checkpoints/tip_rel1000_train256 \
+  --output-dir outputs/lr_tip_formal_train256_tip_rel1000 \
+  --progress-every 64
+```
+
+新增判断：
+
+- fixed-rollout `eval_kl_delta` 继续优于 pure TIP。
+- `eval_regenerated_kl_after` 不明显坏于 fixed-rollout after。
+- 保存的 student checkpoint 可用于后续 answer quality / task accuracy proxy。
