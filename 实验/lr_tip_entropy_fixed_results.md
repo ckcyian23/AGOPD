@@ -1253,6 +1253,40 @@ outputs/lr_tip_relation_loss_scale_tip64_mu1000
 - train/eval 扩大到 64/64。
 - 在 offset0 / offset64 两个 split 上继续复验。
 
+### 15.9 train64/eval64 / mu=1000 扩大验证
+
+输出：
+
+```text
+outputs/lr_tip_relation_loss_scale_tip64_mu1000
+```
+
+已完成：
+
+| Split | Pure TIP KL delta | TIP+rel1000 KL delta | Pure TIP relation delta | TIP+rel1000 relation delta |
+| --- | ---: | ---: | ---: | ---: |
+| offset0 | -0.000573 | -0.001888 | -0.000001603 | -0.000036046 |
+| offset64 | -0.000456 | -0.001491 | -0.000001044 | -0.000030045 |
+
+解释：
+
+- train64/eval64 下，TIP+rel1000 仍显著优于 pure TIP。
+- KL 改善约为 pure TIP 的 3 倍。
+- held-out relation discrepancy 稳定下降约 3% 到 4.5%。
+- 这是目前最强、最稳定的 uplift 证据。
+
+正在运行：
+
+```text
+outputs/lr_tip_relation_loss_scale_tip64_mu1000/offset32_tip_kl
+outputs/lr_tip_relation_loss_scale_tip64_mu1000/offset32_tip_rel1000
+```
+
+目的：
+
+- 补齐 offset32 的 train64/eval64 结果。
+- 如果 offset32 也成立，则可以进入更正式的训练验证或写成核心实验结论。
+
 ## 13. 下一步融合策略验证
 
 当前代码已加入三种 full LR-TIP ranking：
