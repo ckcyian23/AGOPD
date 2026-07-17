@@ -1266,14 +1266,46 @@ outputs/lr_tip_relation_loss_scale_tip64_mu1000
 | Split | Pure TIP KL delta | TIP+rel1000 KL delta | Pure TIP relation delta | TIP+rel1000 relation delta |
 | --- | ---: | ---: | ---: | ---: |
 | offset0 | -0.000573 | -0.001888 | -0.000001603 | -0.000036046 |
+| offset32 | -0.000467 | -0.002318 | -0.000000818 | -0.000037429 |
 | offset64 | -0.000456 | -0.001491 | -0.000001044 | -0.000030045 |
 
 解释：
 
-- train64/eval64 下，TIP+rel1000 仍显著优于 pure TIP。
+- train64/eval64 下，TIP+rel1000 在三个 split 上全部显著优于 pure TIP。
 - KL 改善约为 pure TIP 的 3 倍。
-- held-out relation discrepancy 稳定下降约 3% 到 4.5%。
+- held-out relation discrepancy 稳定下降约 3% 到 4.6%。
 - 这是目前最强、最稳定的 uplift 证据。
+
+### 15.10 train128/eval128 正在运行
+
+输出：
+
+```text
+outputs/lr_tip_relation_loss_scale_tip128_mu1000
+```
+
+配置：
+
+```text
+selector: TIP Soft-OR
+budget: 0.05
+train/eval: 128/128
+loss A: output_KL
+loss B: output_KL + 1000 * relation_profile_loss
+lr: 1e-7
+```
+
+Splits：
+
+| Split | Train rows | Eval rows |
+| --- | --- | --- |
+| offset0 | 0-127 | 128-255 |
+| offset256 | 256-383 | 384-511 |
+
+目的：
+
+- 用更大样本验证 train64/eval64 结论。
+- 如果仍稳定，TIP-selected relation-aware distillation 可以作为当前核心方法结论。
 
 正在运行：
 
